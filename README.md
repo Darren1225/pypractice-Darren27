@@ -4,7 +4,7 @@ Welcome to the Python Machine Learning Engineering Lab. In this lab, you will le
 
 ---
 
-## Project Baseline Overview
+## Project Baseline Overview (專案初始樣態介紹)
 
 This baseline project implements a deep learning pipeline using a custom VGG-16 architecture to recognize and classify Bangladeshi banknotes (denominations: 1, 2, 5, 10, 20, 50, 100, 500, 1000).
 
@@ -50,20 +50,11 @@ Install `uv` globally on your machine:
 ### Step 1.2: Initialize the Project and Manage Dependencies
 We will use a `pyproject.toml` file to declare dependencies rather than a traditional `requirements.txt`:
 1. Run `uv init` in the root of the project to create `pyproject.toml`.
-2. Add project dependencies using `uv add`:
-   ```bash
-   uv add torch torchvision numpy pandas matplotlib scikit-learn tqdm
-   ```
-3. Add development dependencies (linters and type checkers):
-   ```bash
-   uv add --dev ruff mypy
-   ```
+2. Add project dependencies using `uv add` (e.g. `torch`, `torchvision`, `numpy`, `pandas`, `matplotlib`, `scikit-learn`, `tqdm`).
+3. Add development dependencies (linters and type checkers) using `uv add --dev` (e.g. `ruff`, `mypy`).
 4. Run `uv sync` to generate the `uv.lock` file and create the `.venv` virtual environment.
-   - *Concept*: `pyproject.toml` defines abstract dependencies, whereas `uv.lock` locks the exact resolved dependency tree to guarantee absolute reproducibility.
-5. Execute python scripts using `uv run`:
-   ```bash
-   uv run python main.py
-   ```
+   - *Concept*: Understand the difference between `pyproject.toml` (declares abstract dependencies) and `uv.lock` (locks exact resolved dependencies).
+5. Execute python scripts using `uv run`.
 
 ---
 
@@ -83,10 +74,7 @@ pypractice-exercise/
 └── data/
 ```
 In this layout, modules can be imported directly via `import models` or `from dataset import CustomDataset`. 
-- **Run the model** inside the Flat Layout using:
-  ```bash
-  uv run python main.py
-  ```
+- **Goal**: Verify your model runs inside this Flat Layout using `uv run python main.py`.
 
 ### Task 2B: Migrate to Src Layout (Production Standard)
 The Flat Layout suffers from "accidental imports" (modules in the root can be imported even when the package is not installed). Src Layout prevents this by forcing all source code into a `src/` directory.
@@ -94,23 +82,26 @@ The Flat Layout suffers from "accidental imports" (modules in the root can be im
 Reorganize the project to look like this:
 ```
 pypractice-exercise/
+├── main.py               ← entry point, stays in root
 ├── src/
 │   └── banknote_classifier/
 │       ├── __init__.py
-│       ├── main.py
 │       ├── models.py
 │       └── dataset.py
 ├── pyproject.toml
 ├── uv.lock
 └── data/
 ```
-To run the project in Src Layout:
-1. Declare your package in `pyproject.toml` under `[build-system]` and `[project]`:
+
+> **Why keep `main.py` at root?**  
+> `main.py` acts as the entry point and imports from the `banknote_classifier` package (e.g. `from banknote_classifier.models import ...`). When the package is **not installed**, Python cannot resolve the import and will throw a `ModuleNotFoundError`. This directly demonstrates why `uv pip install -e .` (editable install) is required — it registers the `src/` directory so the package becomes importable.
+
+To run the project in Src Layout, configure `pyproject.toml` for packaging and installation:
+1. Define the build system and project metadata in `pyproject.toml` using the following skeleton template:
    ```toml
    [build-system]
-   requires = ["hatchling"]
-   build-backend = "hatchling.build"
-
+   # TODO: Declare the Hatchling build-backend and requirements
+   
    [project]
    name = "banknote-classifier"
    version = "0.1.0"
@@ -118,23 +109,12 @@ To run the project in Src Layout:
    readme = "README.md"
    requires-python = ">=3.12"
    dependencies = [
-       "torch",
-       "torchvision",
-       "numpy",
-       "pandas",
-       "matplotlib",
-       "scikit-learn",
-       "tqdm"
+       # TODO: List all your production packages (torch, torchvision, etc.)
    ]
    ```
-2. Install the package in editable mode:
-   ```bash
-   uv pip install -e .
-   ```
-3. Run the project using the package namespace:
-   ```bash
-   uv run python -m banknote_classifier.main
-   ```
+2. Try running `uv run python main.py` **before** installing — observe the `ModuleNotFoundError`.
+3. Install the package in editable mode using `uv pip install -e .`
+4. **Goal**: Run `uv run python main.py` again — this time it should succeed, importing modules from `src/banknote_classifier/`.
 
 ---
 
@@ -145,37 +125,28 @@ To make your codebase extensible and clean, you will refactor it using two commo
 ### Task 3A: Implement the Registry Pattern
 In large-scale ML systems, we want to configure model architectures dynamically via string names (e.g. from config files) without hardcoding imports.
 
-1. Implement a decorator-based registration system in a new file `src/banknote_classifier/registry.py`:
+1. Implement a decorator-based registration system in a new file `src/banknote_classifier/registry.py` matching the class structure:
    ```python
    import torch.nn as nn
    from typing import Dict, Type
 
    class ModelRegistry:
        def __init__(self) -> None:
-           self._registry: Dict[str, Type[nn.Module]] = {}
+           # TODO: Initialize internal storage (e.g. dict) for model mappings
+           pass
 
        def register(self, name: str):
-           def decorator(cls: Type[nn.Module]):
-               self._registry[name] = cls
-               return cls
-           return decorator
+           # TODO: Implement decorator function to register class mappings
+           pass
 
        def get(self, name: str) -> Type[nn.Module]:
-           if name not in self._registry:
-               raise ValueError(f"Model '{name}' not found in registry.")
-           return self._registry[name]
+           # TODO: Retrieve and return the registered class, or raise ValueError if not found
+           pass
 
    MODEL_REGISTRY = ModelRegistry()
    ```
-2. Register your `VGG16` class in `models.py`:
-   ```python
-   from banknote_classifier.registry import MODEL_REGISTRY
-
-   @MODEL_REGISTRY.register("vgg16")
-   class VGG16(nn.Module):
-       # ...
-   ```
-3. Initialize the model in `main.py` dynamically using `MODEL_REGISTRY.get("vgg16")()`.
+2. Register your `VGG16` class in `models.py` using the `@MODEL_REGISTRY.register("vgg16")` decorator.
+3. In `main.py`, dynamically initialize the model using `MODEL_REGISTRY.get("vgg16")()`.
 
 ### Task 3B: Implement the Strategy Pattern
 The Strategy pattern defines a family of algorithms, encapsulates each one, and makes them interchangeable. We will use it to easily swap data preprocessing/augmentation strategies at runtime.
@@ -188,55 +159,37 @@ The Strategy pattern defines a family of algorithms, encapsulates each one, and 
    class PreprocessStrategy(ABC):
        @abstractmethod
        def get_transforms(self) -> transforms.Compose:
+           # TODO: Define abstract method signature
            pass
 
    class StandardPreprocess(PreprocessStrategy):
        def get_transforms(self) -> transforms.Compose:
-           return transforms.Compose([
-               transforms.Resize((224, 224)),
-               transforms.ToTensor(),
-               transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-           ])
+           # TODO: Implement basic transforms (Resize, ToTensor, standard Normalize)
+           pass
 
    class HeavyAugmentation(PreprocessStrategy):
        def get_transforms(self) -> transforms.Compose:
-           return transforms.Compose([
-               transforms.Resize((224, 224)),
-               transforms.RandomHorizontalFlip(),
-               transforms.RandomRotation(15),
-               transforms.ToTensor(),
-               transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-           ])
+           # TODO: Implement heavy transforms (add flip, rotation, etc.)
+           pass
    ```
-2. Configure the dataset to accept a `PreprocessStrategy` strategy object.
-3. Switch strategies in `main.py` by simply passing either `StandardPreprocess()` or `HeavyAugmentation()` to your dataset loader.
+2. Configure your dataset or dataloader setup to accept a `PreprocessStrategy` strategy object.
+3. **Goal**: Switch between augmentation pipelines in your training setup simply by passing either `StandardPreprocess()` or `HeavyAugmentation()` at runtime.
 
 ---
 
 ## Part 4: Code Quality & Type Safety
 
 ### Step 4.1: Code Linting & Formatting with `ruff`
-Add Ruff settings to your `pyproject.toml`:
-```toml
-[tool.ruff]
-line-length = 100
-select = ["E", "F", "I"] # Pycodestyle (E), Pyflakes (F), Isort (I)
-```
-Run Ruff to check and format your code:
-```bash
-uv run ruff check src/
-uv run ruff format src/
-```
+Add Ruff configurations to `pyproject.toml` (e.g. line-length setting and selecting basic rules `["E", "F", "I"]`).
+1. Run `uv run ruff check src/` to check for style violations and import sorting issues.
+2. Run `uv run ruff format src/` to automatically format all files.
 
 ### Step 4.2: Static Type Checking with `mypy`
-Add the Mypy configurations to `pyproject.toml`:
+Add Mypy configuration section to `pyproject.toml` enabling strict checks:
 ```toml
 [tool.mypy]
 ignore_missing_imports = true
 strict = true
 ```
-Annotate all function parameters and return types (e.g. `model: nn.Module`, `device: torch.device`, `epochs: int -> None`), and verify the code passes the strict type check:
-```bash
-uv run mypy src/
-```
-Ensure there are no type errors!
+1. Add strict Python type annotations (e.g. parameter types and return types) to all your refactored modules (such as your `ModelRegistry` class, training functions, data loader functions, etc.).
+2. Run `uv run mypy src/` and make sure the codebase compiles without any static type check warnings.
