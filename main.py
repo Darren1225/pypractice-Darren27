@@ -6,8 +6,11 @@ import pandas as pd
 import torch.nn as nn
 import torchvision
 import random
+import matplotlib
+# Use non-interactive backend if no display is available
+if not os.environ.get('DISPLAY', ''):
+    matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import pandas as pd
 import torch.optim as optim
 import math
 import multiprocessing
@@ -16,11 +19,29 @@ import time
 from PIL import Image
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader, random_split
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from torchvision import datasets
 
+import subprocess
+import shutil
+
 DATA_PATH = os.path.join('./data/')
+
+# Auto-download the dataset if not exists
+if not os.path.exists(DATA_PATH) or not os.path.exists(os.path.join(DATA_PATH, 'bangla')):
+    print("Dataset not found. Downloading Bangla-Money-Dataset from GitHub...")
+    os.makedirs(DATA_PATH, exist_ok=True)
+    subprocess.run([
+        "git", "clone", "--depth", "1",
+        "https://github.com/nsojib/Bangla-Money-Dataset.git",
+        os.path.join(DATA_PATH, "bangla")
+    ], check=True)
+    git_dir = os.path.join(DATA_PATH, "bangla", ".git")
+    if os.path.exists(git_dir):
+        shutil.rmtree(git_dir)
+    print("Dataset downloaded and extracted successfully!")
+
 print(os.listdir(DATA_PATH))
 
 # use gpu if you have
@@ -259,8 +280,7 @@ class VGG16(nn.Module):
             nn.ReLU(),
             nn.Linear(4096, 4096),
             nn.ReLU(),
-            nn.Linear(4096, class_num),
-            nn.Softmax(dim=1)
+            nn.Linear(4096, class_num)
         )
 
     def forward(self, x):
@@ -290,8 +310,9 @@ valid_acc_list = []
 
 # Specify the saving weight path
 SAVING_PATH = './Saving_Path'
+os.makedirs(SAVING_PATH, exist_ok=True)
 
-valid_loss_min = np.Inf # track change in validation loss
+valid_loss_min = np.inf # track change in validation loss
 
 for epoch in range(1, epochs+1):# loop over the dataset multiple times
 
@@ -437,7 +458,7 @@ import pandas as pd
 import torch.utils.data as data_utils
 TESTDATA_PATH = './data/bangla/Testing'
 for data in os.walk(TESTDATA_PATH):
-  test_data=data[2]
+  test_data = [f for f in data[2] if f.endswith('.jpg')]
 test_transform = transforms.Compose([
 
     transforms.Resize((224, 224)),
