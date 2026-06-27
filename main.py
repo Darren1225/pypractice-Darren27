@@ -441,6 +441,10 @@ def main():
     print(results_df.head(10))
 
 if __name__ == '__main__':
-    # PyTorch multiprocess setup
-    multiprocessing.set_start_method("fork", force=True)
+    # PyTorch multiprocess setup (fork is only supported on Unix-like systems)
+    if os.name != 'nt':
+        try:
+            multiprocessing.set_start_method("fork", force=True)
+        except RuntimeError:
+            pass
     main()
