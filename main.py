@@ -1,286 +1,195 @@
 import os
-import csv
-import torch
+import random
+import time
+import subprocess
+import shutil
+import multiprocessing
 import numpy as np
 import pandas as pd
-import torch.nn as nn
-import torchvision
-import random
 import matplotlib
 # Use non-interactive backend if no display is available
 if not os.environ.get('DISPLAY', ''):
     matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import torch.optim as optim
-import math
-import multiprocessing
-import time
-
 from PIL import Image
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
-from torch.utils.data import Dataset, DataLoader, random_split
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
-from torchvision import datasets
 
-import subprocess
-import shutil
+# ==========================================
+# CONFIGURATION & HYPERPARAMETERS
+# ==========================================
+class Config:
+    SEED = 6220
+    BATCH_SIZE = 64
+    LEARNING_RATE = 0.0001  # Lower learning rate for stable VGG-16 training from scratch
+    EPOCHS = 15
+    NUM_WORKERS = min(4, multiprocessing.cpu_count())
+    DATA_PATH = './data/'
+    SAVING_PATH = './Saving_Path'
+    TESTDATA_PATH = './data/bangla/Testing'
+    TRAINDATA_PATH = './data/bangla/Training'
+    LABEL_MAPPING = {"1": 0, "2": 1, "5": 2, "10": 3, "20": 4, "50": 5, "100": 6, "500": 7, "1000": 8}
+    CLASS_NAMES = ('1', '10', '100', '1000', '2', '20', '5', '50', '500')
+    NUM_CLASSES = 9
 
-DATA_PATH = os.path.join('./data/')
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
 
-# Auto-download the dataset if not exists
-if not os.path.exists(DATA_PATH) or not os.path.exists(os.path.join(DATA_PATH, 'bangla')):
-    print("Dataset not found. Downloading Bangla-Money-Dataset from GitHub...")
-    os.makedirs(DATA_PATH, exist_ok=True)
-    subprocess.run([
-        "git", "clone", "--depth", "1",
-        "https://github.com/nsojib/Bangla-Money-Dataset.git",
-        os.path.join(DATA_PATH, "bangla")
-    ], check=True)
-    git_dir = os.path.join(DATA_PATH, "bangla", ".git")
-    if os.path.exists(git_dir):
-        shutil.rmtree(git_dir)
-    print("Dataset downloaded and extracted successfully!")
+# ==========================================
+# DATASET UTILITIES
+# ==========================================
+def download_dataset(data_path):
+    dataset_dir = os.path.join(data_path, "bangla")
+    if not os.path.exists(data_path) or not os.path.exists(dataset_dir):
+        print("Dataset not found. Downloading Bangla-Money-Dataset from GitHub...")
+        os.makedirs(data_path, exist_ok=True)
+        subprocess.run([
+            "git", "clone", "--depth", "1",
+            "https://github.com/nsojib/Bangla-Money-Dataset.git",
+            dataset_dir
+        ], check=True)
+        # Remove git tracking to avoid nested git repository issues
+        git_dir = os.path.join(dataset_dir, ".git")
+        if os.path.exists(git_dir):
+            shutil.rmtree(git_dir)
+        print("Dataset downloaded successfully!")
+    else:
+        print("Dataset already exists.")
 
-print(os.listdir(DATA_PATH))
+def get_img_info(data_dir, label_mapping):
+    imgpath = []
+    imglabel = []
+    for root, dirs, _ in os.walk(data_dir):
+        for sub_dir in dirs:
+            if sub_dir in label_mapping:
+                sub_dir_path = os.path.join(root, sub_dir)
+                img_names = os.listdir(sub_dir_path)
+                img_names = [f for f in img_names if f.endswith('.jpg')]
+                for img_name in img_names:
+                    imgpath.append(os.path.join(sub_dir_path, img_name))
+                    imglabel.append(label_mapping[sub_dir])
+    return imgpath, imglabel
 
-# use gpu if you have
-if torch.backends.mps.is_available():
-    mps_device = torch.device("mps")
-    x = torch.ones(1, device=mps_device)
-    print ("MPS device is available. Successfully initiated:")
-    print (x)
-    device = mps_device
-elif torch.cuda.is_available():
-    device = torch.device("cuda:0")
-    print("GPU is available.")
-    print("GPU device count:", torch.cuda.device_count())
-    print("Current GPU device:", torch.cuda.current_device())
-    print("GPU device name:", torch.cuda.get_device_name(torch.cuda.current_device()))
-else:
-    device = torch.device("cpu")
-
-print("Use device:",device)
-
-# set random seed
-SEED = 6220
-torch.manual_seed(SEED)
-torch.cuda.manual_seed(SEED)
-np.random.seed(SEED)
-random.seed(SEED)
-torch.backends.cudnn.deterministic = True
-multiprocessing.set_start_method("fork")
-#----------------------------------------------------------------------------------------------------------
-train_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(0.485, 0.229)
-    ])
-valid_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(0.485, 0.229)
-    ])
-#----------------------------------------------------------------------------------------------------------
-# Specify the path to the training folder.
-TRAINDATA_PATH = os.path.join('.','data','bangla', 'Training')
-# print(TRAINDATA_PATH)
-label_name = {"1": 0, "2": 1, "5": 2, "10": 3, "20": 4, "50": 5, "100": 6, "500": 7, "1000": 8}
-
-def get_img_info(data_dir):
-        imgpath = []
-        imglabel = []
-        for root, dirs, _ in os.walk(data_dir):
-            # print("root: ", root)
-            # print("dirs: ", dirs)
-            # Traverse categories
-            for sub_dir in dirs:
-                img_names = os.listdir(os.path.join(root, sub_dir))
-                img_names = list(filter(lambda x: x.endswith('.jpg'), img_names))
-
-                # Traverse images
-                for i in range(len(img_names)):
-                    img_name = img_names[i]
-                    path_img = os.path.join(root, sub_dir, img_name)
-                    label = label_name[sub_dir]
-                    imgpath.append(path_img)
-                    imglabel.append(int(label))
-
-        # Return image paths and labels in data_info
-        return imgpath,  imglabel
-
-imgpath,  imglabel = get_img_info(TRAINDATA_PATH)
-#----------------------------------------------------------------------------------------------------------
-class Custom_dataset(Dataset):
-    def __init__(self,trainData,trainLabel,transform=None):
-        # --------------------------------------------
-        # Initialize paths, transforms, and so on
-        # --------------------------------------------
-        self.images = trainData
-        self.label = trainLabel
+class CustomDataset(Dataset):
+    def __init__(self, img_paths, labels, transform=None):
+        self.img_paths = img_paths
+        self.labels = labels
         self.transform = transform
 
     def __getitem__(self, index):
-        # --------------------------------------------
-        # 1. Read from file (using numpy.fromfile, PIL.Image.open)
-        # 2. Preprocess the data (torchvision.Transform).
-        # 3. Return the data (e.g. image and label)
-        # --------------------------------------------
-        imgpath = self.images[index]
-        img = Image.open(imgpath).convert('RGB')
-
-        label = self.label[index]
+        img = Image.open(self.img_paths[index]).convert('RGB')
+        label = self.labels[index]
         if self.transform:
-          img = self.transform(img)
-
+            img = self.transform(img)
         return img, label
 
     def __len__(self):
-        # --------------------------------------------
-        # Indicate the total size of the dataset
-        # --------------------------------------------
-        return len(self.images)
-#----------------------------------------------------------------------------------------------------------
-# Spilt the train and valid data
-train_img, val_img, train_label, val_label = train_test_split(imgpath, imglabel, test_size=0.2, random_state=42)
+        return len(self.img_paths)
 
-train_set = Custom_dataset(train_img, train_label, transform=train_transform)
-valid_set = Custom_dataset(val_img, val_label, transform=valid_transform)
+class CustomTestDataset(Dataset):
+    def __init__(self, img_paths, transform=None):
+        self.img_paths = img_paths
+        self.transform = transform
 
-print('Number of total training data:', len(train_set))
-print('Number of total validation data:', len(valid_set))
+    def __getitem__(self, index):
+        img = Image.open(self.img_paths[index]).convert('RGB')
+        if self.transform:
+            img = self.transform(img)
+        return img
 
-class_num = 9
-classes = ('1', '10', '100', '1000', '2', '20', '5', '50', '500')
+    def __len__(self):
+        return len(self.img_paths)
 
-# Loaded Datasets to DataLoaders
-# please change the batch_size
-trainloader = DataLoader(train_set, batch_size=16 , shuffle=True, num_workers = 0)
-validloader = DataLoader(valid_set, batch_size=16 , shuffle=False, num_workers = 0)
-#----------------------------------------------------------------------------------------------------------
-import numpy as np
-import matplotlib.pyplot as plt
+def denormalize_image(tensor):
+    # Denormalize image using standard ImageNet mean and std
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    img = tensor.cpu().numpy().transpose((1, 2, 0))
+    img = std * img + mean
+    img = np.clip(img, 0, 1)
+    return img
 
-# Checking the dataset
-for images, labels in trainloader:
-    print('Image batch dimensions:', images.shape)
-    print('Image label dimensions:', labels.shape)
-    break
-
-for img,labels in trainloader:
-    # load a batch from train data
-    break
-
-# this converts it from GPU to CPU and selects first image
-img = img.cpu().numpy()[0]
-#convert image back to Height,Width,Channels
-img = np.transpose(img, (1,2,0))
-#show the image
-plt.imshow(img)
-plt.show()
-
-for images, labels in validloader:
-    print('Image batch dimensions:', images.shape)
-    print('Image label dimensions:', labels.shape)
-    break
-
-for img_test,labels in validloader:
-    # load a batch from train data
-    break
-
-# this converts it from GPU to CPU and selects first image
-img_test = img_test.cpu().numpy()[0]
-#convert image back to Height,Width,Channels
-img_test = np.transpose(img_test, (1,2,0))
-#show the image
-plt.imshow(img_test)
-plt.show()
-#----------------------------------------------------------------------------------------------------------
-##############################################
-# Build your model here!
-#
-# Practice:
-#   Try to implement VGG-16 with pytorch !
-##############################################
-
+# ==========================================
+# MODEL DEFINITION (VGG-16)
+# ==========================================
 class VGG16(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=Config.NUM_CLASSES):
         super(VGG16, self).__init__()
 
-        ##############################################################################
-        #                          TODO: implement VGG-16.                           #
-        ##############################################################################
         self.conv_block = nn.Sequential(
-#---------------------------------------------------------------------------------------------------------------------------
-            nn.Conv2d(3,  64, kernel_size=3, stride=1, padding=1),
+            # Block 1
+            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
-#---------------------------------------------------------------------------------------------------------------------------
+
+            # Block 2
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
-#---------------------------------------------------------------------------------------------------------------------------
+
+            # Block 3
             nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(256),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
-#---------------------------------------------------------------------------------------------------------------------------
+
+            # Block 4
             nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
-#---------------------------------------------------------------------------------------------------------------------------
+
+            # Block 5
             nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.Conv2d(512, 512, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-
+            nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
         )
-#---------------------------------------------------------------------------------------------------------------------------
+
         self.feat_classifier = nn.Sequential(
-            nn.Linear(7*7*512, 4096),
-            nn.ReLU(),
+            nn.Linear(7 * 7 * 512, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.5),
             nn.Linear(4096, 4096),
-            nn.ReLU(),
-            nn.Linear(4096, class_num)
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.5),
+            nn.Linear(4096, num_classes)
         )
 
     def forward(self, x):
@@ -289,258 +198,249 @@ class VGG16(nn.Module):
         x = self.feat_classifier(x)
         return x
 
-model = VGG16()
-model.to(device)
-#---------------------------------------------------------------------------------------------------------------------------
-print("device: ",device)
-model = model.to(device)
-criterion = nn.CrossEntropyLoss()
-
-learning_rate = 0.001
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-epochs = 1
-
-model.train()
-#---------------------------------------------------------------------------------------------------------------------------
-# Training model
-train_loss_list = []
-train_acc_list = []
-valid_loss_list = []
-valid_acc_list = []
-
-# Specify the saving weight path
-SAVING_PATH = './Saving_Path'
-os.makedirs(SAVING_PATH, exist_ok=True)
-
-valid_loss_min = np.inf # track change in validation loss
-
-for epoch in range(1, epochs+1):# loop over the dataset multiple times
-
-    # keep track of training and validation loss
-    train_loss = 0.0
-    valid_loss = 0.0
-    print('running epoch: {}'.format(epoch))
-
-    # train the model
+# ==========================================
+# TRAINING & VALIDATION PIPELINE
+# ==========================================
+def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
-    train_correct = 0
-    train_total = 0
-    for data, target in tqdm(trainloader):
-      # move tensors to GPU if CUDA is available
-      data, target = data.to(device), target.to(device)
-      # clear the gradients of all optimized variables
-      optimizer.zero_grad()
-      # forward pass: compute predicted outputs by passing inputs to the model
-      output = model(data)
-      # calculate the batch loss
-      loss = criterion(output, target)
-      # backward pass: compute gradient of the loss with respect to model parameters
-      loss.backward()
-      # perform a single optimization step (parameter update)
-      optimizer.step()
-      # update training loss
-      train_loss += loss.item()*data.size(0)
-      # update training Accuracy
-      train_total += target.size(0)
-      _, predicted = torch.max(output.data, 1)
-      train_correct += (predicted == target).sum().item()
+    running_loss = 0.0
+    correct = 0
+    total = 0
 
-
-    # validate the model
-    model.eval()
-    valid_correct = 0
-    valid_total = 0
-    for data, target in tqdm(validloader):
-        # move tensors to GPU if CUDA is available
-        target = target.long()
+    for data, target in tqdm(loader, desc="Training"):
         data, target = data.to(device), target.to(device)
-        # forward pass: compute predicted outputs by passing inputs to the model
+        optimizer.zero_grad()
         output = model(data)
-        # calculate the batch loss
         loss = criterion(output, target)
-        # update average validation loss
-        valid_loss += loss.item()*data.size(0)
-        # update validation Accuracy
-        valid_total += target.size(0)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item() * data.size(0)
         _, predicted = torch.max(output.data, 1)
-        valid_correct += (predicted == target).sum().item()
-    # calculate average losses
-    train_loss = train_loss/len(trainloader.dataset)
-    valid_loss = valid_loss/len(validloader.dataset)
+        total += target.size(0)
+        correct += (predicted == target).sum().item()
 
-    # print training/validation statistics
-    print('Training Loss: {:.6f} \tTraining Accuracy: {:.6f}'.format(train_loss,(100 * train_correct / train_total)))
-    print('Validation Loss: {:.6f} \tValidation Accuracy: {:.6f}'.format(valid_loss,(100 * valid_correct / valid_total)))
+    epoch_loss = running_loss / len(loader.dataset)
+    epoch_acc = (correct / total) * 100
+    return epoch_loss, epoch_acc
 
-    train_loss_list.append(train_loss)
-    train_acc_list.append(100 * train_correct / train_total)
-    valid_loss_list.append(valid_loss)
-    valid_acc_list.append(100 * valid_correct / valid_total)
+def validate(model, loader, criterion, device):
+    model.eval()
+    running_loss = 0.0
+    correct = 0
+    total = 0
 
-    # save model if validation loss has decreased
-    if valid_loss <= valid_loss_min:
-        print('Validation loss decreased ({:.6f} --> {:.6f}).  Saving model ...'.format(
-        valid_loss_min,
-        valid_loss))
-        torch.save(model.state_dict(), SAVING_PATH+'/model_weight.pth')
-        valid_loss_min = valid_loss
+    with torch.no_grad():
+        for data, target in tqdm(loader, desc="Validation"):
+            target = target.long()
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            loss = criterion(output, target)
 
-print('Finished Training')
-#---------------------------------------------------------------------------------------------------------------------------
-def plt_loss_acc(list_to_draw,name):
-    fig = plt.figure(figsize=(15, 5))
-    ax1 = fig.add_subplot(1, 2, 1)
-    if name=="train_loss":
-      ax1.set_title('Train Loss')
-      ax1.plot(list_to_draw)
-    elif name=="train_acc":
-      ax1.set_title('Train Accuracy')
-      ax1.plot(list_to_draw)
-    elif name=="valid_loss":
-      ax1.set_title('Valid Loss')
-      ax1.plot(list_to_draw)
-    elif name=="valid_acc":
-      ax1.set_title('Valid Accuracy')
-      ax1.plot(list_to_draw)
+            running_loss += loss.item() * data.size(0)
+            total += target.size(0)
+            _, predicted = torch.max(output.data, 1)
+            correct += (predicted == target).sum().item()
 
-    ax1.set_xlabel('epoch')
+    epoch_loss = running_loss / len(loader.dataset)
+    epoch_acc = (correct / total) * 100
+    return epoch_loss, epoch_acc
+
+# ==========================================
+# PLOTTING UTILITIES
+# ==========================================
+def save_and_show_plots(train_losses, valid_losses, train_accs, valid_accs, saving_path):
+    os.makedirs(saving_path, exist_ok=True)
+    epochs = range(1, len(train_losses) + 1)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+    # Loss Curve
+    ax1.plot(epochs, train_losses, label='Train Loss', color='blue', marker='o')
+    ax1.plot(epochs, valid_losses, label='Valid Loss', color='red', marker='x')
+    ax1.set_title('Training & Validation Loss')
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss')
+    ax1.legend()
+    ax1.grid(True)
+
+    # Accuracy Curve
+    ax2.plot(epochs, train_accs, label='Train Acc', color='blue', marker='o')
+    ax2.plot(epochs, valid_accs, label='Valid Acc', color='red', marker='x')
+    ax2.set_title('Training & Validation Accuracy')
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('Accuracy (%)')
+    ax2.legend()
+    ax2.grid(True)
+
+    plt.tight_layout()
+    plot_file = os.path.join(saving_path, 'loss_accuracy_curves.png')
+    plt.savefig(plot_file, dpi=300)
+    print(f"Saved training curves to {plot_file}")
     plt.show()
-
-def plt_loss_acc_all():
-    fig = plt.figure(figsize=(15, 5))
-    ax1 = fig.add_subplot(1, 2, 1)
-    ax1.set_title('All acc and loss')
-
-    ax1.plot(train_loss_list)
-    ax1.plot(train_acc_list)
-    ax1.plot(valid_loss_list)
-    ax1.plot(valid_acc_list)
-
-    ax1.legend(['train_loss', 'train_acc', 'valid_loss', 'valid_acc'], loc='upper left')
-    ax1.set_xlabel('epoch')
-    plt.show()
-
-def plt_acc_all():
-    fig = plt.figure(figsize=(15, 5))
-    ax1 = fig.add_subplot(1, 2, 1)
-    ax1.set_title('All acc')
-
-    ax1.plot(train_acc_list)
-    ax1.plot(valid_acc_list)
-
-    ax1.legend(['train_acc', 'valid_acc'], loc='upper left')
-    ax1.set_xlabel('epoch')
-    plt.show()
-
-def plt_loss_all():
-    fig = plt.figure(figsize=(15, 5))
-    ax1 = fig.add_subplot(1, 2, 1)
-    ax1.set_title('All loss')
-
-    ax1.plot(train_loss_list)
-    ax1.plot(valid_loss_list)
-
-    ax1.legend(['train_loss', 'valid_loss'], loc='upper left')
-    ax1.set_xlabel('epoch')
-    plt.show()
-#---------------------------------------------------------------------------------------------------------------------------
-plt_loss_acc(train_loss_list, "train_loss")
-plt_loss_acc(train_acc_list, "train_acc")
-plt_loss_acc(valid_loss_list, "valid_loss")
-plt_loss_acc(valid_acc_list, "valid_acc")
-plt_loss_all()
-plt_acc_all()
-#---------------------------------------------------------------------------------------------------------------------------
-print(predicted[0].item())
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import torch.utils.data as data_utils
-TESTDATA_PATH = './data/bangla/Testing'
-for data in os.walk(TESTDATA_PATH):
-  test_data = [f for f in data[2] if f.endswith('.jpg')]
-test_transform = transforms.Compose([
-
-    transforms.Resize((224, 224)),
-
-    transforms.ToTensor(),
-
-    transforms.Normalize(
-        mean=[0.485,0.456,0.406],
-        std=[0.229,0.224,0.225])
-    ])
-class Custom_testset(Dataset):
-    def __init__(self,testData,transform=None):
-        # --------------------------------------------
-        # Initialize paths, transforms, and so on
-        # --------------------------------------------
-        self.images = testData
-        #self.label = trainLabel
-        self.transform = transform
-
-    def __getitem__(self, index):
-        # --------------------------------------------
-        # 1. Read from file (using numpy.fromfile, PIL.Image.open)
-        # 2. Preprocess the data (torchvision.Transform).
-        # 3. Return the data (e.g. image and label)
-        # --------------------------------------------
-        imgpath = self.images[index]
-        img = Image.open(imgpath).convert('RGB')
-
-        if self.transform:
-          img = self.transform(img)
-
-        return img
-
-    def __len__(self):
-        # --------------------------------------------
-        # Indicate the total size of the dataset
-        # --------------------------------------------
-        return len(self.images)
 
 def trueclass(num):
-  if num==0:
-    return 1
-  elif num==1:
-    return 2
-  elif num==2:
-    return 5
-  elif num==3:
-    return 10
-  elif num==4:
-    return 20
-  elif num==5:
-    return 50
-  elif num==6:
-    return 100
-  elif num==7:
-    return 500
-  elif num==8:
-    return 1000
+    # Map index to denomination
+    mapping = {0: 1, 1: 2, 2: 5, 3: 10, 4: 20, 5: 50, 6: 100, 7: 500, 8: 1000}
+    return mapping.get(num, 0)
 
-imgpath=[]
-prediction=[]
-for photo in test_data:
-  path_img = os.path.join(TESTDATA_PATH,photo)
-  imgpath.append(path_img)
-# print('id = ',test_data)
-test_set = Custom_testset(imgpath,test_transform)
-testloader = DataLoader(test_set, batch_size=1 , shuffle=False, num_workers = 0)
-for images in testloader:
-    print('Image batch dimensions:', images.shape)
-    break
+# ==========================================
+# MAIN EXECUTION
+# ==========================================
+def main():
+    # 1. Setup
+    set_seed(Config.SEED)
+    os.makedirs(Config.SAVING_PATH, exist_ok=True)
 
-#images = np.transpose(images, (1,2,0))
-for images in testloader:
-  #print('image = ',images)
-  images=images.to(device)
-  output = model(images)
-  predicted = torch.argmax(output,dim=1)
-  #print('Image predicted label = :', predicted.item())
-  prediction=np.append(prediction,trueclass(predicted.item()))
+    # Device selection
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda:0")
+    else:
+        device = torch.device("cpu")
+    print(f"Using device: {device}")
 
-example={'image':test_data,
-      'class':prediction}
-df = pd.DataFrame(example)
-print(df)
-df.to_csv('./data/example.csv',index=False)
+    # 2. Download and Load Data
+    download_dataset(Config.DATA_PATH)
+    
+    # Define Transforms
+    train_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(15),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    valid_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+
+    # Load image paths and labels
+    img_paths, labels = get_img_info(Config.TRAINDATA_PATH, Config.LABEL_MAPPING)
+    train_imgs, val_imgs, train_lbls, val_lbls = train_test_split(
+        img_paths, labels, test_size=0.2, random_state=42
+    )
+
+    # Build Datasets and DataLoaders
+    train_set = CustomDataset(train_imgs, train_lbls, transform=train_transform)
+    valid_set = CustomDataset(val_imgs, val_lbls, transform=valid_transform)
+
+    print(f"Total training samples: {len(train_set)}")
+    print(f"Total validation samples: {len(valid_set)}")
+
+    train_loader = DataLoader(
+        train_set, batch_size=Config.BATCH_SIZE, shuffle=True,
+        num_workers=Config.NUM_WORKERS, pin_memory=True
+    )
+    valid_loader = DataLoader(
+        valid_set, batch_size=Config.BATCH_SIZE, shuffle=False,
+        num_workers=Config.NUM_WORKERS, pin_memory=True
+    )
+
+    # 3. Model, Loss, Optimizer & Scheduler
+    model = VGG16(num_classes=Config.NUM_CLASSES).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=Config.LEARNING_RATE)
+    
+    # Cosine annealing lr scheduler for standard training
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=Config.EPOCHS)
+
+    # 4. Training Loop
+    train_loss_list = []
+    train_acc_list = []
+    valid_loss_list = []
+    valid_acc_list = []
+    valid_loss_min = np.inf
+
+    print("\n--- Starting Training ---")
+    for epoch in range(1, Config.EPOCHS + 1):
+        print(f"\nEpoch {epoch}/{Config.EPOCHS} | LR: {scheduler.get_last_lr()[0]:.6f}")
+        
+        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device)
+        valid_loss, valid_acc = validate(model, valid_loader, criterion, device)
+        
+        scheduler.step()
+
+        print(f"Train Loss: {train_loss:.6f} | Train Acc: {train_acc:.2f}%")
+        print(f"Valid Loss: {valid_loss:.6f} | Valid Acc: {valid_acc:.2f}%")
+
+        train_loss_list.append(train_loss)
+        train_acc_list.append(train_acc)
+        valid_loss_list.append(valid_loss)
+        valid_acc_list.append(valid_acc)
+
+        # Save model if validation loss has decreased
+        if valid_loss <= valid_loss_min:
+            best_model_path = os.path.join(Config.SAVING_PATH, 'model_weight.pth')
+            print(f"Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}). Saving model weights to {best_model_path}")
+            torch.save(model.state_dict(), best_model_path)
+            valid_loss_min = valid_loss
+
+    print("\nFinished Training!")
+
+    # 5. Plot Loss & Accuracy Curves
+    save_and_show_plots(train_loss_list, valid_loss_list, train_acc_list, valid_acc_list, Config.SAVING_PATH)
+
+    # 6. Inference on Test Set
+    print("\n--- Starting Inference ---")
+    
+    # Read test images
+    for data in os.walk(Config.TESTDATA_PATH):
+        test_filenames = [f for f in data[2] if f.endswith('.jpg')]
+    
+    test_paths = [os.path.join(Config.TESTDATA_PATH, f) for f in test_filenames]
+    
+    # Load Best Model Weights
+    best_model_path = os.path.join(Config.SAVING_PATH, 'model_weight.pth')
+    if os.path.exists(best_model_path):
+        print(f"Loading best weights from {best_model_path} for test inference...")
+        model.load_state_dict(torch.load(best_model_path, map_location=device))
+    
+    # Setup test dataset and loader
+    test_set = CustomTestDataset(test_paths, transform=valid_transform)
+    test_loader = DataLoader(test_set, batch_size=1, shuffle=False, num_workers=Config.NUM_WORKERS)
+
+    # Run predictions
+    model.eval()
+    prediction_classes = []
+    ground_truth_classes = []
+    
+    with torch.no_grad():
+        for i, images in enumerate(tqdm(test_loader, desc="Predicting")):
+            images = images.to(device)
+            outputs = model(images)
+            predicted = torch.argmax(outputs, dim=1)
+            
+            pred_val = trueclass(predicted.item())
+            prediction_classes.append(pred_val)
+            
+            # Parse ground truth from filename
+            filename = test_filenames[i]
+            true_val = int(filename.split('_')[0])
+            ground_truth_classes.append(true_val)
+
+    # Calculate and display test accuracy
+    correct = sum(1 for p, g in zip(prediction_classes, ground_truth_classes) if p == g)
+    total = len(test_filenames)
+    test_accuracy = (correct / total) * 100
+    print(f"\nTest Accuracy: {correct}/{total} ({test_accuracy:.2f}%)")
+
+    # Export to CSV
+    results_df = pd.DataFrame({
+        'image': test_filenames,
+        'class': prediction_classes
+    })
+    
+    csv_output_path = './data/example.csv'
+    results_df.to_csv(csv_output_path, index=False)
+    print(f"\nSaved test predictions to {csv_output_path}")
+    print(results_df.head(10))
+
+if __name__ == '__main__':
+    # PyTorch multiprocess setup
+    multiprocessing.set_start_method("fork", force=True)
+    main()
