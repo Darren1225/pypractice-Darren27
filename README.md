@@ -4,7 +4,7 @@ Welcome to the Python Machine Learning Engineering Lab. In this lab, you will le
 
 ---
 
-## Project Baseline Overview (專案初始樣態介紹)
+## Project Baseline Overview
 
 This baseline project implements a deep learning pipeline using a custom VGG-16 architecture to recognize and classify Bangladeshi banknotes (denominations: 1, 2, 5, 10, 20, 50, 100, 500, 1000).
 
