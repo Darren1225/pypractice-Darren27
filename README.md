@@ -149,10 +149,12 @@ To make the Src Layout work, you need to tell the build system where your source
    > **Hint**: The `[build-system]` section tells `uv` (and `pip`) to use Hatchling as the build backend. Hatchling follows the `src/` layout convention by default, meaning it knows to look for packages under `src/`.
 
 2. **Try running before installing** — observe the error:
+   To observe the `ModuleNotFoundError` correctly, run python using the virtual environment interpreter directly without `uv run` (since `uv run` will automatically build and install the package if `pyproject.toml` is present):
    ```bash
-   uv run python main.py
+   .venv/bin/python main.py
    # Expected: ModuleNotFoundError: No module named 'banknote_classifier'
    ```
+   (Alternatively, you can run `uv run --no-project python main.py` to achieve the same effect.)
    This error proves that Src Layout successfully isolates your package — it cannot be imported without proper installation.
 
 3. **Install in editable mode** to fix the import:
@@ -204,8 +206,11 @@ class VGG16(nn.Module):
 MODEL_REGISTRY["vgg16"] = VGG16
 ```
 
-In `main.py`, retrieve the model dynamically:
+In `main.py`, retrieve the model dynamically. Note that because `main.py` no longer directly references the `VGG16` class, Python will *not* import `models.py` by default. This means the registration code (`MODEL_REGISTRY["vgg16"] = VGG16`) will not be executed, and accessing `MODEL_REGISTRY["vgg16"]` will throw a `KeyError`.
+
+To trigger the registration, you must also import the `models` module in `main.py` for its side-effects:
 ```python
+from banknote_classifier import models  # Triggers registration
 from banknote_classifier.registry import MODEL_REGISTRY
 
 # Instead of: model = VGG16(num_classes=9)
@@ -387,6 +392,17 @@ valid_set = CustomDataset(val_imgs, val_lbls, transform=valid_strategy)
    ```
 
 **✅ Checkpoint**: `uv run ruff check src/ main.py` reports `All checks passed!`
+
+> 💡 **Matplotlib Import Order and E402 Warning**:
+> In `main.py`, you configure the matplotlib backend dynamically before importing `pyplot`:
+> ```python
+> if not os.environ.get('DISPLAY', ''):
+>     matplotlib.use('Agg')
+> import matplotlib.pyplot as plt
+> ```
+> Ruff expects all module imports to be at the very top of the file (E402). If you place `from banknote_classifier...` imports *after* this `if` block, Ruff will raise a lint error.
+> 
+> To resolve this, place all standard library and package imports (including `banknote_classifier`) at the very top of `main.py`, followed by the environment check and backend selection, and finally `import matplotlib.pyplot as plt` at the end of the import block.
 
 ---
 
