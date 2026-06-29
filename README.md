@@ -275,7 +275,7 @@ model = model_cls(num_classes=Config.NUM_CLASSES).to(device)
 > **Important**: Decorators only run when the module is loaded. If `models.py` is never imported, the registration never happens. Make sure your `__init__.py` imports the models module:
 > ```python
 > # src/banknote_classifier/__init__.py
-> from .models import VGG16
+> from .models import VGG16 as VGG16  # Use 'as VGG16' to prevent Ruff F401 unused import error
 > ```
 
 **✅ Checkpoint**: Training works, and the model is loaded via `MODEL_REGISTRY.get("vgg16")`.
@@ -358,6 +358,9 @@ valid_strategy = StandardPreprocess()
 # Pass strategies directly to datasets
 train_set = CustomDataset(train_imgs, train_lbls, transform=train_strategy)
 valid_set = CustomDataset(val_imgs, val_lbls, transform=valid_strategy)
+
+# Don't forget to update the test set as well later in the file!
+# test_set = CustomTestDataset(test_paths, transform=valid_strategy)
 ```
 
 > **Why is this better?**  
@@ -374,7 +377,7 @@ valid_set = CustomDataset(val_imgs, val_lbls, transform=valid_strategy)
 1. Add Ruff configuration to your `pyproject.toml`:
    ```toml
    [tool.ruff]
-   line-length = 120
+   line-length = 135
 
    [tool.ruff.lint]
    select = ["E", "F", "I"]
