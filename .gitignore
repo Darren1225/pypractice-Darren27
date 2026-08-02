@@ -34,3 +34,4 @@ Saving_Path/
 # System files
 .DS_Store
 Thumbs.db
+.venv/
